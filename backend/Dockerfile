@@ -1,5 +1,9 @@
 FROM node:22-slim AS build
 WORKDIR /app
+# Prisma necesita OpenSSL para el motor de esquema/consultas — node:22-slim
+# no lo trae por defecto (sin esto, `prisma generate`/`db push` fallan en
+# runtime con "Schema engine error" sin más detalle).
+RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 COPY package.json ./
 RUN npm install
 COPY . .
@@ -13,6 +17,7 @@ RUN npm run build
 FROM node:22-slim
 WORKDIR /app
 ENV NODE_ENV=production
+RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
