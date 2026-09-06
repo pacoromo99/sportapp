@@ -1,0 +1,11 @@
+{
+  "expo": {
+    "name": "SportApp",
+    "slug": "sportapp",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "ios": { "supportsTablet": true },
+    "android": {}
+  }
+}

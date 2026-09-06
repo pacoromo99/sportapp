@@ -1,0 +1,164 @@
+// Modelo canónico + módulo de fútbol.
+// Dev/demo usa SQLite para arrancar sin infraestructura; en producción
+// cambia el provider a "postgresql" y DATABASE_URL a tu instancia gestionada
+// (el resto del esquema no cambia).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Núcleo (compartido entre deportes) ----------
+
+model Competition {
+  id         String   @id @default(cuid())
+  externalId String?  @unique // id del proveedor (API-Football league id) — permite upsert idempotente
+  name       String
+  country    String
+  sport      String   // "football" por ahora; módulo por deporte se añade sin tocar este núcleo
+  season     String
+  events     Event[]
+}
+
+// Cubre tanto equipos (fútbol) como jugadores individuales (tenis) — el
+// núcleo no distingue "equipo" de "participante", ver arquitectura.
+model Team {
+  id         String   @id @default(cuid())
+  externalId String?  @unique // id del proveedor — permite upsert idempotente
+  name       String
+  country    String
+  sport      String
+  ranking    Int?     // ranking ATP/WTA u otro — mercado 1X2/ganador de partido en tenis
+  homeEvents Event[]  @relation("HomeTeam")
+  awayEvents Event[]  @relation("AwayTeam")
+}
+
+model Event {
+  id            String       @id @default(cuid())
+  externalId    String?      @unique // id del proveedor (fixture id) — permite upsert idempotente
+  competitionId String
+  competition   Competition  @relation(fields: [competitionId], references: [id])
+  homeTeamId    String
+  homeTeam      Team         @relation("HomeTeam", fields: [homeTeamId], references: [id])
+  awayTeamId    String
+  awayTeam      Team         @relation("AwayTeam", fields: [awayTeamId], references: [id])
+  kickoff       DateTime
+  status        String       // scheduled | live | finished
+  minute        Int?
+  homeScore     Int          @default(0)
+  awayScore     Int          @default(0)
+  homeScoreHT   Int?         // marcador al descanso — mercado HT/FT (fútbol)
+  awayScoreHT   Int?
+  surface       String?      // clay | hard | grass — solo tenis; ver docs/market-mapping.md
+  footballStats FootballEventStats?
+  tennisStats   TennisEventStats?
+  sets          TennisSet[]
+  goals         Goal[]
+  lineups       Lineup[]
+  alerts        Alert[]
+}
+
+// Un gol por fila: minuto + jugador + equipo → mercados de primer
+// goleador / anytime scorer y HT-FT (ver docs/market-mapping.md).
+model Goal {
+  id       String @id @default(cuid())
+  eventId  String
+  event    Event  @relation(fields: [eventId], references: [id])
+  teamId   String
+  minute   Int
+  player   String
+  type     String @default("open_play") // open_play | penalty | own_goal
+}
+
+// Alineación probable/confirmada — Fase 2, alimenta anytime scorer con
+// minutos jugados reales en vez de solo histórico.
+model Lineup {
+  id        String  @id @default(cuid())
+  eventId   String
+  event     Event   @relation(fields: [eventId], references: [id])
+  teamId    String
+  player    String
+  position  String
+  isStarter Boolean @default(true)
+}
+
+// Alerta contextual: el momento exacto en que el apostador necesita
+// reaccionar (ver "Datos que impulsan la apuesta" → Cómo se traduce en
+// producto). Se persiste para que sobreviva a una reconexión de WebSocket
+// y para poder mostrar un historial en MatchDetail.
+model Alert {
+  id        String   @id @default(cuid())
+  eventId   String
+  event     Event    @relation(fields: [eventId], references: [id])
+  market    String   // a qué mercado afecta: "1x2" | "cards" | "goalscorer" | "over_under"
+  message   String
+  createdAt DateTime @default(now())
+}
+
+// ---------- Módulo Fútbol ----------
+// Cada campo está anotado (ver docs/market-mapping.md) con el mercado de
+// apuestas al que alimenta, para priorizar qué capturar primero.
+
+model FootballEventStats {
+  id               String  @id @default(cuid())
+  eventId          String  @unique
+  event            Event   @relation(fields: [eventId], references: [id])
+
+  homePossession   Int?    // 1X2 / control del partido
+  awayPossession   Int?
+
+  homeXg           Float?  // hándicap asiático, over/under
+  awayXg           Float?
+
+  homeShotsOnGoal  Int?
+  awayShotsOnGoal  Int?
+
+  homeCorners      Int?    // mercado de córners
+  awayCorners      Int?
+
+  homeYellowCards  Int?    // mercado de tarjetas
+  awayYellowCards  Int?
+  homeRedCards     Int?
+  awayRedCards     Int?
+
+  referee          String? // media histórica de tarjetas del árbitro (dato externo al partido)
+}
+
+// ---------- Módulo Tenis ----------
+// homeScore/awayScore en Event representan sets ganados (no goles) — así
+// computeTeamForm/computeHeadToHead (formCalculations.ts) funcionan igual
+// para tenis sin cambiar una línea: son agnósticas a qué representa el
+// marcador, solo comparan "a favor" vs "en contra".
+
+// Un set por fila: alimenta el mercado de hándicap de sets/juegos y el de
+// ganador de set/primer set (ver docs/market-mapping.md).
+model TennisSet {
+  id           String @id @default(cuid())
+  eventId      String
+  event        Event  @relation(fields: [eventId], references: [id])
+  setNumber    Int
+  homeGames    Int
+  awayGames    Int
+  wasTiebreak  Boolean @default(false)
+}
+
+model TennisEventStats {
+  id                  String @id @default(cuid())
+  eventId             String @unique
+  event               Event  @relation(fields: [eventId], references: [id])
+
+  homeAces            Int?   // total de juegos / rendimiento al saque
+  awayAces            Int?
+  homeDoubleFaults    Int?
+  awayDoubleFaults    Int?
+  homeFirstServeInPct Int?   // % primer saque dentro
+  awayFirstServeInPct Int?
+  homeBreakPointsWon  Int?   // breaks por set — mercado hándicap de juegos
+  homeBreakPointsTotal Int?
+  awayBreakPointsWon  Int?
+  awayBreakPointsTotal Int?
+}
